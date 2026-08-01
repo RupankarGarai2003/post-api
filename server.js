@@ -21,27 +21,65 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.send("Post Your Thoughts API is running 🚀");
 });
-
 // Create post
 app.post("/posts", async (req, res) => {
   try {
     const { name, text, image } = req.body;
 
-    if (!text) {
+    // Validate text
+    if (!text || typeof text !== "string" || text.trim() === "") {
       return res.status(400).json({
         success: false,
         message: "Text is required",
       });
     }
 
+    let imageData = null;
+
+    // Validate image (optional)
+    if (image !== undefined && image !== null) {
+      if (typeof image !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "Image must be a Base64 string.",
+        });
+      }
+
+      const imageRegex =
+        /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=\r\n]+$/;
+
+      if (!imageRegex.test(image)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Only PNG, JPG, JPEG and WEBP Base64 images are allowed.",
+        });
+      }
+
+      const base64 = image.split(",")[1];
+      const imageSize = Buffer.byteLength(base64, "base64");
+
+      if (imageSize > 20 * 1024 * 1024) {
+        return res.status(400).json({
+          success: false,
+          message: "Image size must be less than 2 MB.",
+        });
+      }
+
+      imageData = image;
+    }
+
     const doc = await db.collection("posts").add({
-      name: name || "Anonymous",
-      text,
-      image: image || null,
+      name:
+        typeof name === "string" && name.trim()
+          ? name.trim()
+          : "Anonymous",
+      text: text.trim(),
+      image: imageData,
       ts: FieldValue.serverTimestamp(),
     });
 
-    res.json({
+    return res.status(201).json({
       success: true,
       id: doc.id,
       message: "Post created successfully",
@@ -50,13 +88,12 @@ app.post("/posts", async (req, res) => {
   } catch (err) {
     console.error(err);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: err.message,
     });
   }
 });
-
 // Get all posts
 app.get("/posts", async (req, res) => {
   try {
