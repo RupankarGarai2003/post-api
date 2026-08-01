@@ -6,6 +6,14 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
+const multer = require("multer");
+
+const upload = multer({
+  storage: multer.memoryStorage()
+});
+
+
+
 initializeApp({
   credential: cert(serviceAccount),
 });
@@ -16,15 +24,18 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Home route
 app.get("/", (req, res) => {
   res.send("Post Your Thoughts API is running 🚀");
 });
 // Create post
-app.post("/posts", async (req, res) => {
+app.post("/posts", upload.single("image"), async (req, res) => {
   try {
-    const { name, text, image } = req.body;
+    const { name, text } = req.body;
+
+    const image = req.file;
 
     // Validate text
     if (!text || typeof text !== "string" || text.trim() === "") {
