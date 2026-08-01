@@ -1,29 +1,30 @@
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
 const { initializeApp, cert } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-const { getStorage } = require("firebase-admin/storage");
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const multer = require("multer");
+const { v2: cloudinary } = require("cloudinary");
+const streamifier = require("streamifier");
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB cap, matches the size check below
 });
 
-// Must match your Firebase project's storage bucket
-// (Firebase Console -> Project settings -> General -> your web app config -> storageBucket).
-// Override with the FIREBASE_STORAGE_BUCKET env var if needed.
-const STORAGE_BUCKET =
-  process.env.FIREBASE_STORAGE_BUCKET ||
-  "post-your-thoughts-d0a34.firebasestorage.app";
+// Cloudinary config — set these three as environment variables in Render
+// (Dashboard -> your service -> Environment). Get the values from
+// cloudinary.com/console, right at the top of the dashboard.
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 initializeApp({
   credential: cert(serviceAccount),
-  storageBucket: STORAGE_BUCKET,
 });
 const db = getFirestore();
-const bucket = getStorage().bucket();
 
 const app = express();
 app.use(cors());
@@ -34,6 +35,24 @@ app.use(express.urlencoded({ extended: true }));
 app.get("/", (req, res) => {
   res.send("Post Your Thoughts API is running 🚀");
 });
+
+// Uploads a Buffer to Cloudinary using its upload_stream API and
+// resolves with the result (which includes secure_url).
+function uploadBufferToCloudinary(buffer) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "posts",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      }
+    );
+    streamifier.createReadStream(buffer).pipe(stream);
+  });
+}
 
 // Create post
 app.post("/posts", upload.single("image"), async (req, res) => {
@@ -72,33 +91,10 @@ app.post("/posts", upload.single("image"), async (req, res) => {
         });
       }
 
-      // Upload the original file buffer directly to Firebase Storage —
-      // no Base64 conversion, no re-encoding.
-      const ext = (file.originalname.match(/\.[a-zA-Z0-9]+$/) || [""])[0];
-      const filename = `posts/${Date.now()}-${crypto
-        .randomBytes(8)
-        .toString("hex")}${ext}`;
-      const blob = bucket.file(filename);
-      const downloadToken = crypto.randomUUID();
-
-      // Use a Firebase download token instead of blob.makePublic().
-      // makePublic() throws on buckets with "uniform bucket-level access"
-      // enabled (the default for newer Firebase projects), which was
-      // causing the 500 errors. Tokened URLs work regardless of that
-      // setting and are what the Firebase client SDK itself generates.
-      await blob.save(file.buffer, {
-        contentType: file.mimetype,
-        resumable: false,
-        metadata: {
-          metadata: {
-            firebaseStorageDownloadTokens: downloadToken,
-          },
-        },
-      });
-
-      imageUrl = `https://firebasestorage.googleapis.com/v0/b/${
-        bucket.name
-      }/o/${encodeURIComponent(filename)}?alt=media&token=${downloadToken}`;
+      // Upload the original file buffer directly to Cloudinary —
+      // no Base64 conversion, no re-encoding on our side.
+      const result = await uploadBufferToCloudinary(file.buffer);
+      imageUrl = result.secure_url;
     }
 
     const doc = await db.collection("posts").add({
