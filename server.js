@@ -79,14 +79,26 @@ app.post("/posts", upload.single("image"), async (req, res) => {
         .randomBytes(8)
         .toString("hex")}${ext}`;
       const blob = bucket.file(filename);
+      const downloadToken = crypto.randomUUID();
 
+      // Use a Firebase download token instead of blob.makePublic().
+      // makePublic() throws on buckets with "uniform bucket-level access"
+      // enabled (the default for newer Firebase projects), which was
+      // causing the 500 errors. Tokened URLs work regardless of that
+      // setting and are what the Firebase client SDK itself generates.
       await blob.save(file.buffer, {
         contentType: file.mimetype,
         resumable: false,
+        metadata: {
+          metadata: {
+            firebaseStorageDownloadTokens: downloadToken,
+          },
+        },
       });
-      await blob.makePublic();
 
-      imageUrl = `https://storage.googleapis.com/${bucket.name}/${filename}`;
+      imageUrl = `https://firebasestorage.googleapis.com/v0/b/${
+        bucket.name
+      }/o/${encodeURIComponent(filename)}?alt=media&token=${downloadToken}`;
     }
 
     const doc = await db.collection("posts").add({
